@@ -13,13 +13,89 @@
         BLOCK_DIAGONAL_ADJACENCY: false
     };
 
-    const sections = [
-        { name: 'home', url: 'index.html', isHome: true },
-        { name: 'about', url: 'about.html', isHome: false },
-        { name: 'cv', url: 'cv.html', isHome: false },
-        { name: 'blog', url: 'blog.html', isHome: false },
-        { name: 'booking', url: 'booking.html', isHome: false }
+    const DEFAULT_HOME_LABEL = 'home';
+    const DEFAULT_CATEGORIES = [
+        { key: 'about', label: 'about' },
+        { key: 'booking', label: 'booking' },
+        { key: 'collabs', label: 'collabs' },
+        { key: 'training', label: 'training' },
+        { key: 'blog', label: 'blog' }
     ];
+
+    let sections = [];
+
+    function normalizeCategories(rawCategories, dataKeys = []) {
+        const normalized = Array.isArray(rawCategories)
+            ? rawCategories.map((category) => {
+                const key = typeof category?.key === 'string' ? category.key.trim() : '';
+                if (!key) return null;
+                const label = typeof category?.label === 'string' && category.label.trim()
+                    ? category.label.trim()
+                    : key;
+                return { key, label };
+            }).filter(Boolean)
+            : [];
+
+        const keys = new Set(normalized.map((category) => category.key));
+
+        DEFAULT_CATEGORIES.forEach((category) => {
+            if (keys.has(category.key)) return;
+            keys.add(category.key);
+            normalized.push({ ...category });
+        });
+
+        dataKeys.forEach((key) => {
+            if (!key || keys.has(key)) return;
+            keys.add(key);
+            normalized.push({ key, label: key });
+        });
+
+        return normalized;
+    }
+
+    function buildSectionsFromData(data) {
+        const dataKeys = data && typeof data === 'object'
+            ? Object.keys(data).filter((key) => key !== 'meta' && Array.isArray(data[key]))
+            : [];
+        const categories = normalizeCategories(data?.meta?.categories, dataKeys)
+            .filter((category) => category.key !== 'home');
+        const homeLabel = typeof data?.meta?.homeLabel === 'string' && data.meta.homeLabel.trim()
+            ? data.meta.homeLabel.trim()
+            : DEFAULT_HOME_LABEL;
+
+        return [
+            { key: 'home', label: homeLabel, url: 'index.html', isHome: true },
+            ...categories.map((category) => ({
+                key: category.key,
+                label: category.label || category.key,
+                url: `${category.key}.html`,
+                isHome: false
+            }))
+        ];
+    }
+
+    async function loadSections() {
+        try {
+            const response = await fetch('data.json', { cache: 'no-cache' });
+            if (!response.ok) {
+                const errorMsg = response.status === 404 
+                    ? 'data.json no encontrado'
+                    : response.status >= 500
+                    ? 'Error del servidor al cargar data.json'
+                    : `Error HTTP ${response.status} al cargar data.json`;
+                throw new Error(errorMsg);
+            }
+            const data = await response.json();
+            return buildSectionsFromData(data);
+        } catch (error) {
+            if (error instanceof SyntaxError) {
+                console.error('data.json contiene JSON inválido:', error);
+            } else {
+                console.warn('No se pudo cargar data.json para el grid:', error.message);
+            }
+            return buildSectionsFromData(null);
+        }
+    }
 
     function getCellsPerAxis() {
         return window.matchMedia('(max-width: 768px)').matches
@@ -81,7 +157,7 @@
                 y = Math.floor(Math.random() * rows);
                 key = toKey(x, y);
                 attempts++;
-                if (attempts > 1000) return null;
+                if (attempts > 100) return null;
             } while (used.has(key));
 
             markForbiddenAround(x, y);
@@ -232,7 +308,7 @@
             if (CONFIG.AVOID_OTHER_DESTINATIONS) {
                 blocked = new Set(
                     destinations
-                        .filter(d => d.section.name !== dest.section.name)
+                        .filter(d => d.section.key !== dest.section.key)
                         .map(d => toKey(d.x, d.y))
                 );
             }
@@ -242,7 +318,7 @@
                 : findSimplePath(start, end);
 
             if (!path) return null;
-            paths[dest.section.name] = path;
+            paths[dest.section.key] = path;
 
             if (CONFIG.PREFER_EXISTING_PATHS) {
                 for (const p of path) preferredCells.add(toKey(p.x, p.y));
@@ -311,13 +387,13 @@
                         cell.classList.add('home');
                         const label = document.createElement('span');
                         label.className = 'section-label';
-                        label.textContent = section.name;
+                        label.textContent = section.label;
                         cell.appendChild(label);
                     } else {
                         cell.classList.add('destination');
                         const link = document.createElement('a');
                         link.href = section.url;
-                        link.textContent = section.name;
+                        link.textContent = section.label;
                         cell.appendChild(link);
                     }
                 }
@@ -382,9 +458,10 @@
         createGrid(gridSize, config.positions, config.paths);
     }
 
-    function setupGrid() {
+    async function setupGrid() {
         if (!document.getElementById('gridContainer')) return;
 
+        sections = await loadSections();
         initGrid();
         let resizeTimeout;
         window.addEventListener('resize', () => {
@@ -401,52 +478,44 @@
 })();
 
 // ============================================================================
-// MARQUEE (páginas internas)
-// ============================================================================
-(() => {
-    const MARQUEE_CONFIG = {
-        logoPath: 'assets/images/LOGO.webp',
-        logoCount: 24
-    };
-
-    function fillMarquee(marqueeContainer) {
-        marqueeContainer.innerHTML = '';
-        const marqueeContent = document.createElement('div');
-        marqueeContent.className = 'marquee-content';
-
-        for (let i = 0; i < MARQUEE_CONFIG.logoCount; i++) {
-            const logo = document.createElement('img');
-            logo.src = MARQUEE_CONFIG.logoPath;
-            logo.alt = 'safe amorx';
-            logo.className = 'marquee-logo';
-            marqueeContent.appendChild(logo);
-        }
-
-        marqueeContainer.appendChild(marqueeContent);
-    }
-
-    function setupMarquee() {
-        if (document.body.classList.contains('home-page')) return;
-
-        const marqueeTop = document.querySelector('.marquee-top');
-        const marqueeBottom = document.querySelector('.marquee-bottom');
-        if (!marqueeTop || !marqueeBottom) return;
-
-        fillMarquee(marqueeTop);
-        fillMarquee(marqueeBottom);
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupMarquee);
-    } else {
-        setupMarquee();
-    }
-})();
-
-// ============================================================================
 // LOADER (contenido dinámico)
 // ============================================================================
 (() => {
+    const COLLAPSE_RESIZE_DEBOUNCE_MS = 150;
+    const BLOG_BATCH = 6;
+    let collapseResizeTimeout;
+
+    function setParagraphsMaxHeight(wrapper) {
+        if (!wrapper) return;
+        wrapper.style.setProperty('--content-max-height', `${wrapper.scrollHeight}px`);
+    }
+
+    function updateCollapsibleHeights(root = document) {
+        const wrappers = root.querySelectorAll('.content-paragraphs');
+        wrappers.forEach(setParagraphsMaxHeight);
+    }
+
+    let resizeObserver = null;
+
+    function setupResizeObserver(contentContainer) {
+        // Limpiar observer anterior si existe
+        if (resizeObserver) {
+            resizeObserver.disconnect();
+        }
+
+        // Crear nuevo ResizeObserver con debounce
+        let resizeTimeout;
+        resizeObserver = new ResizeObserver(() => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                updateCollapsibleHeights(contentContainer);
+            }, COLLAPSE_RESIZE_DEBOUNCE_MS);
+        });
+
+        // Observar el contenedor principal
+        resizeObserver.observe(contentContainer);
+    }
+
     async function initContentLoader() {
         const contentContainer = document.querySelector('.page-content');
         if (!contentContainer) return;
@@ -457,58 +526,96 @@
         try {
             const response = await fetch('data.json');
             if (!response.ok) {
-                throw new Error(`Error al cargar data.json: ${response.status}`);
+                const errorMsg = response.status === 404
+                    ? 'data.json no encontrado'
+                    : response.status >= 500
+                    ? 'Error del servidor al cargar data.json'
+                    : `Error HTTP ${response.status} al cargar data.json`;
+                throw new Error(errorMsg);
             }
 
             const data = await response.json();
-            if (data && data[pageType]) {
-                renderContent(data[pageType]);
-            }
+            const contentArray = Array.isArray(data?.[pageType]) ? data[pageType] : [];
+            renderContent(contentArray, pageType);
+            requestAnimationFrame(() => updateCollapsibleHeights(contentContainer));
+            
+            // Usar ResizeObserver en lugar de window.resize
+            setupResizeObserver(contentContainer);
         } catch (error) {
-            console.error('Error al inicializar el loader:', error);
+            if (error instanceof SyntaxError) {
+                console.error('data.json contiene JSON inválido:', error);
+            } else {
+                console.error('Error al inicializar el loader:', error.message);
+            }
+            // Mostrar placeholder si falla la carga
+            renderContent([], pageType);
         }
     }
 
     function detectPageType() {
-        const title = document.title.toLowerCase();
-
-        if (title.includes('about')) return 'about';
-        if (title.includes('booking')) return 'booking';
-        if (title.includes('curriculum') || title.includes('cv')) return 'cv';
-
-        return null;
+        const pageCategory = document.body?.dataset?.category
+            || document.querySelector('.page-content')?.dataset?.category;
+        if (!pageCategory) return null;
+        return pageCategory.trim().toLowerCase();
     }
 
-    function renderContent(contentArray) {
+    function renderContent(contentArray, pageType) {
         const contentContainer = document.querySelector('.page-content');
         if (!contentContainer) return;
 
         const fragment = document.createDocumentFragment();
 
-        contentArray.forEach((section, index) => {
-            const sectionElement = createSection(section, index);
-            fragment.appendChild(sectionElement);
-        });
+        const sections = Array.isArray(contentArray) ? contentArray : [];
+
+        if (sections.length === 0) {
+            fragment.appendChild(createPlaceholderSection());
+        } else {
+            sections.forEach((section, index) => {
+                const sectionElement = createSection(section, index);
+                fragment.appendChild(sectionElement);
+            });
+        }
 
         const h1 = contentContainer.querySelector('h1');
         const backLink = contentContainer.querySelector('.back-link');
+        const footerLink = contentContainer.querySelector('.about-web-link');
 
-        if (backLink) {
+        if (footerLink) {
+            contentContainer.insertBefore(fragment, footerLink);
+        } else if (backLink) {
             contentContainer.insertBefore(fragment, backLink);
         } else if (h1) {
             h1.after(fragment);
         } else {
             contentContainer.appendChild(fragment);
         }
+
+        if (pageType === 'blog') {
+            setupBlogPagination(contentContainer);
+        }
+    }
+
+    // Crea sección vacía para mostrar "proximamente".
+    function createPlaceholderSection() {
+        const sectionDiv = document.createElement('div');
+        sectionDiv.className = 'content-section';
+        sectionDiv.classList.add('is-empty');
+        const p = document.createElement('p');
+        p.textContent = 'proximamente';
+        sectionDiv.appendChild(p);
+        return sectionDiv;
     }
 
     function normalizeBlocks(section) {
+        const fallbackIndent = section && section.sangria !== undefined ? section.sangria : 0;
         if (Array.isArray(section.bloques)) {
             return section.bloques.map(block => ({
                 subtitulo: typeof block.subtitulo === 'string' ? block.subtitulo : '',
                 texto: Array.isArray(block.texto)
                     ? block.texto
-                    : (typeof block.texto === 'string' ? [block.texto] : [])
+                    : (typeof block.texto === 'string' ? [block.texto] : []),
+                desplegable: typeof block.desplegable === 'boolean' ? block.desplegable : false,
+                sangria: (typeof block.sangria === 'number' || typeof block.sangria === 'string') ? block.sangria : fallbackIndent
             }));
         }
 
@@ -519,36 +626,231 @@
             ? section.texto
             : (typeof section.texto === 'string' ? [section.texto] : []);
 
-        return [{ subtitulo, texto }];
+        return [{ subtitulo, texto, desplegable: false, sangria: fallbackIndent }];
+    }
+
+    function normalizeIndent(value) {
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            const clamped = Math.min(50, Math.max(0, value));
+            return `${clamped}%`;
+        }
+        if (typeof value === 'string' && value.trim()) {
+            const trimmed = value.trim();
+            if (/^\d+(\.\d+)?%$/.test(trimmed) || /^\d+(\.\d+)?$/.test(trimmed)) {
+                const parsed = Number.parseFloat(trimmed);
+                if (Number.isFinite(parsed)) {
+                    const clamped = Math.min(50, Math.max(0, parsed));
+                    return `${clamped}%`;
+                }
+            }
+        }
+        return '';
+    }
+
+    // Extrae un <a> del HTML sin permitir nodos adicionales.
+    function buildAnchorFromHtml(html) {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = html;
+        const anchor = wrapper.querySelector('a');
+        if (!anchor) return null;
+
+        const safeAnchor = document.createElement('a');
+        safeAnchor.textContent = anchor.textContent || '';
+        const href = anchor.getAttribute('href');
+        const target = anchor.getAttribute('target');
+        const rel = anchor.getAttribute('rel');
+        if (href) safeAnchor.setAttribute('href', href);
+        if (target) safeAnchor.setAttribute('target', target);
+        if (rel) {
+            safeAnchor.setAttribute('rel', rel);
+        } else if (target === '_blank') {
+            safeAnchor.setAttribute('rel', 'noopener noreferrer');
+        }
+        return safeAnchor;
+    }
+
+    // Inserta texto y anchors preservando el contenido no link.
+    function appendParagraphContent(container, raw) {
+        if (typeof raw !== 'string') return;
+        const regex = /<a\b[^>]*>[\s\S]*?<\/a>/gi;
+        let lastIndex = 0;
+        let match;
+
+        while ((match = regex.exec(raw)) !== null) {
+            const before = raw.slice(lastIndex, match.index);
+            if (before) {
+                container.appendChild(document.createTextNode(before));
+            }
+            const anchor = buildAnchorFromHtml(match[0]);
+            if (anchor) {
+                container.appendChild(anchor);
+            } else {
+                container.appendChild(document.createTextNode(match[0]));
+            }
+            lastIndex = regex.lastIndex;
+        }
+
+        const after = raw.slice(lastIndex);
+        if (after) {
+            container.appendChild(document.createTextNode(after));
+        }
+    }
+
+    let lightbox;
+    let lightboxKeyHandlerAttached = false;
+
+    function ensureLightbox() {
+        if (lightbox) return lightbox;
+        lightbox = document.createElement('div');
+        lightbox.className = 'lightbox';
+        lightbox.setAttribute('aria-hidden', 'true');
+
+        const img = document.createElement('img');
+        img.className = 'lightbox-image';
+        img.alt = '';
+        lightbox.appendChild(img);
+
+        lightbox.addEventListener('click', (event) => {
+            if (event.target === lightbox) closeLightbox();
+        });
+
+        if (!lightboxKeyHandlerAttached) {
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') closeLightbox();
+            });
+            lightboxKeyHandlerAttached = true;
+        }
+
+        document.body.appendChild(lightbox);
+        return lightbox;
+    }
+
+    function openLightbox(src, altText) {
+        if (!src) return;
+        const overlay = ensureLightbox();
+        const img = overlay.querySelector('img');
+        img.src = src;
+        img.alt = altText || '';
+        overlay.classList.add('is-visible');
+        overlay.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('lightbox-open');
+    }
+
+    function closeLightbox() {
+        if (!lightbox) return;
+        const img = lightbox.querySelector('img');
+        img.src = '';
+        img.alt = '';
+        lightbox.classList.remove('is-visible');
+        lightbox.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('lightbox-open');
     }
 
     function createSection(section, index) {
         const sectionDiv = document.createElement('div');
         sectionDiv.className = 'content-section';
         sectionDiv.setAttribute('data-section-index', index);
+        let hasContent = false;
 
         if (section.titulo) {
             const h2 = document.createElement('h2');
             h2.textContent = section.titulo;
             sectionDiv.appendChild(h2);
+            hasContent = true;
         }
 
         const blocks = normalizeBlocks(section);
-        blocks.forEach(block => {
-            if (block.subtitulo && block.subtitulo.trim()) {
-                const h3 = document.createElement('h3');
-                h3.textContent = block.subtitulo;
-                sectionDiv.appendChild(h3);
+        blocks.forEach((block, blockIndex) => {
+            const blockWrapper = document.createElement('div');
+            blockWrapper.className = 'content-block';
+            const blockIndent = normalizeIndent(block.sangria);
+            if (blockIndent) {
+                blockWrapper.style.setProperty('--block-paragraph-indent', blockIndent);
             }
 
+            const paragraphsWrapper = document.createElement('div');
+            paragraphsWrapper.className = 'content-paragraphs';
+            paragraphsWrapper.id = `block-${index}-${blockIndex}-content`;
+
+            let hasParagraphs = false;
+            let hasHeader = false;
             block.texto.forEach(parrafo => {
                 const trimmed = typeof parrafo === 'string' ? parrafo.trim() : '';
                 if (!trimmed) return;
                 const p = document.createElement('p');
-                p.textContent = parrafo;
-                sectionDiv.appendChild(p);
+                appendParagraphContent(p, parrafo);
+                paragraphsWrapper.appendChild(p);
+                hasParagraphs = true;
             });
+
+            if (block.subtitulo && block.subtitulo.trim()) {
+                const header = document.createElement('div');
+                header.className = 'content-block-header';
+                const h3 = document.createElement('h3');
+                h3.textContent = block.subtitulo;
+                header.appendChild(h3);
+                hasHeader = true;
+
+                if (block.desplegable && hasParagraphs) {
+                    const toggle = document.createElement('button');
+                    toggle.type = 'button';
+                    toggle.className = 'block-toggle';
+                    toggle.setAttribute('aria-expanded', 'false');
+                    toggle.setAttribute('aria-controls', paragraphsWrapper.id);
+                    toggle.setAttribute('aria-label', 'Expandir bloque');
+                    toggle.textContent = '>';
+
+                    toggle.addEventListener('click', () => {
+                        setParagraphsMaxHeight(paragraphsWrapper);
+                        const isCollapsed = blockWrapper.classList.toggle('is-collapsed');
+                        toggle.setAttribute('aria-expanded', String(!isCollapsed));
+                        toggle.setAttribute('aria-label', isCollapsed ? 'Expandir bloque' : 'Contraer bloque');
+                    });
+
+                    blockWrapper.classList.add('is-collapsed');
+                    header.appendChild(toggle);
+                }
+
+                blockWrapper.appendChild(header);
+            }
+
+            if (hasHeader || hasParagraphs) {
+                if (hasParagraphs) {
+                    blockWrapper.appendChild(paragraphsWrapper);
+                }
+                sectionDiv.appendChild(blockWrapper);
+                hasContent = true;
+            }
         });
+
+        if (section.imagenes && Array.isArray(section.imagenes) && section.imagenes.length > 0) {
+            const imagesContainer = document.createElement('div');
+            imagesContainer.className = 'images-container';
+
+            section.imagenes.forEach(image => {
+                if (!image || !image.src) return;
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'image-item';
+
+                const img = document.createElement('img');
+                img.src = image.src;
+                img.alt = image.alt || '';
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                img.className = 'image-thumb';
+
+                item.appendChild(img);
+                item.addEventListener('click', () => openLightbox(image.src, image.alt || ''));
+                imagesContainer.appendChild(item);
+            });
+
+            if (imagesContainer.children.length > 0) {
+                sectionDiv.appendChild(imagesContainer);
+                hasContent = true;
+            }
+        }
 
         if (section.logos && Array.isArray(section.logos) && section.logos.length > 0) {
             const logosContainer = document.createElement('div');
@@ -570,9 +872,55 @@
             });
 
             sectionDiv.appendChild(logosContainer);
+            hasContent = true;
+        }
+
+        if (!hasContent) {
+            sectionDiv.classList.add('is-empty');
+            const p = document.createElement('p');
+            p.textContent = 'proximamente';
+            sectionDiv.appendChild(p);
         }
 
         return sectionDiv;
+    }
+
+    // Paginación tipo "load more" para blog.
+    function setupBlogPagination(container) {
+        const sections = Array.from(container.querySelectorAll('.content-section'));
+        if (sections.length <= BLOG_BATCH) return;
+
+        let visibleLimit = BLOG_BATCH;
+        const loadMoreBtn = document.createElement('button');
+        loadMoreBtn.type = 'button';
+        loadMoreBtn.className = 'load-more-btn';
+        loadMoreBtn.textContent = 'cargar más';
+
+        loadMoreBtn.addEventListener('click', () => {
+            visibleLimit += BLOG_BATCH;
+            applyPagination();
+        });
+
+        const backLink = container.querySelector('.back-link');
+        const footerLink = container.querySelector('.about-web-link');
+        if (footerLink) {
+            container.insertBefore(loadMoreBtn, footerLink);
+        } else if (backLink) {
+            container.insertBefore(loadMoreBtn, backLink);
+        } else {
+            container.appendChild(loadMoreBtn);
+        }
+
+        function applyPagination() {
+            let count = 0;
+            sections.forEach((section) => {
+                count += 1;
+                section.hidden = count > visibleLimit;
+            });
+            loadMoreBtn.style.display = count > visibleLimit ? 'inline-flex' : 'none';
+        }
+
+        applyPagination();
     }
 
     if (document.readyState === 'loading') {
